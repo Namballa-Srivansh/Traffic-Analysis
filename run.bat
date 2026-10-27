@@ -1,0 +1,6 @@
+@echo off
+echo Starting Express Backend...
+start cmd /k "cd backend && npm install && node server.js"
+
+echo Starting Next.js Frontend...
+start cmd /k "cd frontend && npm install && npm run dev"
