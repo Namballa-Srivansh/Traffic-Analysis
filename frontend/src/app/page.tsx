@@ -34,7 +34,11 @@ import {
   Clock,
   BarChart3,
   Image as ImageIcon,
+  Lightbulb,
+  Zap,
+  Leaf,
 } from "lucide-react";
+import StreetlightSimulation from "@/components/StreetlightSimulation";
 
 // Helper function to format vehicle class names cleanly
 function formatClassName(rawName: string): { name: string; category: string; color: string } {
@@ -158,6 +162,9 @@ export default function Home() {
 
   // Filter presets by media type
   const [presetFilter, setPresetFilter] = useState<"all" | "video" | "image">("all");
+
+  // Navigation module: "vision" (default traffic detection) or "streetlight" (simulation digital twin)
+  const [mainView, setMainView] = useState<"vision" | "streetlight">("vision");
 
   // Viewer modes
   const [activeTab, setActiveTab] = useState<"annotated" | "original" | "split" | "dual">("annotated");
@@ -533,6 +540,13 @@ export default function Home() {
       totalVehicles: totalVehiclesCount,
       densityLevel: densityStatus.label,
       heavyRatio: heavyRatioPercent + "%",
+      adaptiveStreetlighting: {
+        currentDimLevelPercent: streetlightQuickMetrics.brightness,
+        dimmingStatus: streetlightQuickMetrics.mode,
+        activePowerWatts: streetlightQuickMetrics.currentWatts,
+        baselineUnmanagedWatts: streetlightQuickMetrics.baselineWatts,
+        powerReductionPercent: streetlightQuickMetrics.powerSavedPct + "%",
+      },
       counts: result.counts,
       summary: result.summary,
       timeline: result.timeline,
@@ -566,6 +580,11 @@ export default function Home() {
       csv += `"Summary","Total Frames Processed",${result.summary.processedFrames}\n`;
       csv += `"Summary","Duration (s)",${result.summary.durationSec}\n`;
     }
+
+    csv += `"Smart Streetlight","Brightness Level","${streetlightQuickMetrics.brightness}%"\n`;
+    csv += `"Smart Streetlight","Dimming Mode","${streetlightQuickMetrics.mode}"\n`;
+    csv += `"Smart Streetlight","Active Power (Watts)",${streetlightQuickMetrics.currentWatts}\n`;
+    csv += `"Smart Streetlight","Power Conserved (%)","${streetlightQuickMetrics.powerSavedPct}%"\n`;
 
     csv += "\nVehicle Class,Count,Category\n";
     Object.entries(result.counts).forEach(([cls, count]) => {
@@ -608,6 +627,11 @@ export default function Home() {
       );
     }
 
+    summaryLines.push(
+      `Smart Streetlight Dim Level: ${streetlightQuickMetrics.brightness}% [${streetlightQuickMetrics.mode}]`,
+      `Grid Power Reduction: ${streetlightQuickMetrics.powerSavedPct}% (${streetlightQuickMetrics.instantWattsSaved}W saved vs 900W baseline)`
+    );
+
     summaryLines.push("Vehicle Class Breakdown:");
     Object.entries(result.counts).forEach(([cls, cnt]) => {
       summaryLines.push(` - ${formatClassName(cls).name}: ${cnt}`);
@@ -625,6 +649,63 @@ export default function Home() {
     ? result.summary?.totalUniqueVehicles ??
     Object.values(result.counts).reduce((acc, curr) => acc + (Number(curr) || 0), 0)
     : 0;
+
+  // Current active vehicles synchronized with video playback position or image detections
+  const currentActiveVehicleCount = React.useMemo(() => {
+    if (result?.mediaType === "video" && result.timeline && result.timeline.length > 0) {
+      let closest = result.timeline[0];
+      let minDiff = Math.abs(currentTime - closest.timeSec);
+      for (const pt of result.timeline) {
+        const diff = Math.abs(currentTime - pt.timeSec);
+        if (diff < minDiff) {
+          minDiff = diff;
+          closest = pt;
+        }
+      }
+      return closest.activeCount;
+    }
+    return totalVehiclesCount;
+  }, [result, currentTime, totalVehiclesCount]);
+
+  // Derived Streetlight Dimming Telemetry for Quick HUD Widget
+  const streetlightQuickMetrics = React.useMemo(() => {
+    const count = currentActiveVehicleCount;
+    let brightness = 20;
+    let mode = "DIM ECO";
+    let color = "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
+
+    if (count === 0) {
+      brightness = 20;
+      mode = "DIM ECO (SECURITY GLOW)";
+      color = "text-emerald-400 bg-emerald-500/10 border-emerald-500/20";
+    } else if (count <= 2) {
+      brightness = 45;
+      mode = "LOW DENSITY COMMUTER";
+      color = "text-cyan-400 bg-cyan-500/10 border-cyan-500/20";
+    } else if (count <= 6) {
+      brightness = 75;
+      mode = "MODERATE CORRIDOR FLOW";
+      color = "text-amber-400 bg-amber-500/10 border-amber-500/20";
+    } else {
+      brightness = 100;
+      mode = "HIGH BEAM (PEAK TRAFFIC)";
+      color = "text-rose-400 bg-rose-500/10 border-rose-500/20";
+    }
+
+    const baselineWatts = 900; // 6 poles x 150W
+    const currentWatts = Math.round(baselineWatts * (brightness / 100));
+    const powerSavedPct = Math.round(((baselineWatts - currentWatts) / baselineWatts) * 100);
+
+    return {
+      brightness,
+      mode,
+      color,
+      currentWatts,
+      baselineWatts,
+      powerSavedPct,
+      instantWattsSaved: baselineWatts - currentWatts,
+    };
+  }, [currentActiveVehicleCount]);
 
   // Heavy transport calculation (trucks & buses)
   const heavyVehiclesCount = result
@@ -772,6 +853,162 @@ export default function Home() {
           </div>
         </header>
 
+        {/* Main Application Module Switcher */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-6 pb-3 border-b border-slate-800/80 gap-3">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setMainView("vision")}
+              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${
+                mainView === "vision"
+                  ? "bg-gradient-to-r from-cyan-500/20 to-blue-500/20 text-cyan-300 border border-cyan-500/40 shadow-lg shadow-cyan-500/10"
+                  : "text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent"
+              }`}
+            >
+              <Film className="w-4 h-4 text-cyan-400" />
+              <span>Traffic Vision Telemetry</span>
+            </button>
+
+            <button
+              onClick={() => setMainView("streetlight")}
+              className={`px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-2 ${
+                mainView === "streetlight"
+                  ? "bg-gradient-to-r from-amber-500/20 to-yellow-500/20 text-amber-300 border border-amber-500/40 shadow-lg shadow-amber-500/10"
+                  : "text-slate-400 hover:text-white hover:bg-slate-900 border border-transparent"
+              }`}
+            >
+              <Lightbulb className="w-4 h-4 text-amber-400" />
+              <span>Smart Streetlight Simulation</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                {Math.round(streetlightQuickMetrics.brightness)}% Dim
+              </span>
+            </button>
+          </div>
+
+          <div className="flex items-center gap-3 text-xs font-mono text-slate-400">
+            <span className="flex items-center gap-1.5 text-emerald-400">
+              <Zap className="w-3.5 h-3.5" />
+              {streetlightQuickMetrics.powerSavedPct}% Power Conserved
+            </span>
+            <span className="text-slate-600 hidden sm:inline">•</span>
+            <span className="text-slate-400 hidden sm:inline">
+              Active Flow: <strong className="text-white">{currentActiveVehicleCount} veh</strong>
+            </span>
+          </div>
+        </div>
+
+        {mainView === "streetlight" ? (
+          <section className="mb-12 animate-in fade-in duration-300 space-y-6">
+            <StreetlightSimulation
+              syncedTrafficCount={currentActiveVehicleCount}
+              isLiveVideo={isVideoResult}
+              currentTime={currentTime}
+              videoDuration={videoDuration || result?.summary?.durationSec || 0}
+              timeline={result?.timeline}
+              onSeek={handleSeek}
+            />
+
+            {/* If video is currently analyzed or loaded, show the synchronized player bar below */}
+            {result?.mediaType === "video" && (
+              <div className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800/80">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <Video className="w-4 h-4 text-cyan-400" />
+                    <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                      Synchronized AI Video Stream Feed
+                    </h4>
+                  </div>
+                  <span className="text-[11px] font-mono text-cyan-300">
+                    {currentTime.toFixed(1)}s / {(videoDuration || result.summary?.durationSec || 5).toFixed(1)}s
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+                  <div className="md:col-span-5 rounded-xl overflow-hidden aspect-video bg-black border border-slate-800 relative">
+                    <video
+                      ref={primaryVideoRef}
+                      src={result.video}
+                      className="w-full h-full object-contain"
+                      onTimeUpdate={handleVideoTimeUpdate}
+                      onLoadedMetadata={handleVideoLoadedMetadata}
+                      playsInline
+                      muted={isMuted}
+                      loop
+                    />
+                  </div>
+
+                  <div className="md:col-span-7 flex flex-col space-y-3">
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={togglePlayPause}
+                        className="px-4 py-2 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold text-xs transition flex items-center gap-1.5"
+                      >
+                        {isPlaying ? <Pause className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 fill-current" />}
+                        <span>{isPlaying ? "Pause Stream" : "Play Stream"}</span>
+                      </button>
+                      <button
+                        onClick={() => handleSeek(0)}
+                        className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs transition"
+                      >
+                        Restart (0s)
+                      </button>
+                      <button
+                        onClick={() => setMainView("vision")}
+                        className="ml-auto text-xs text-cyan-400 hover:underline flex items-center gap-1"
+                      >
+                        Inspect AI Detections & Class Ratios <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-3">
+                      <span className="text-[11px] font-mono text-slate-400 w-10 text-right">
+                        {currentTime.toFixed(1)}s
+                      </span>
+                      <input
+                        type="range"
+                        min="0"
+                        max={videoDuration || result.summary?.durationSec || 5}
+                        step="0.05"
+                        value={currentTime}
+                        onChange={(e) => handleSeek(parseFloat(e.target.value))}
+                        className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                      />
+                      <span className="text-[11px] font-mono text-slate-400 w-10">
+                        {(videoDuration || result.summary?.durationSec || 5).toFixed(1)}s
+                      </span>
+                    </div>
+
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      As the traffic video plays, ByteTrack neural detections modulate each streetlight fixture&apos;s illumination and power draw in real time.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* If no video is analyzed yet, provide a quick link to load the Expressway sample */}
+            {!result && (
+              <div className="p-4 rounded-xl bg-slate-900/50 border border-slate-800/80 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-300">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                  <span>
+                    Want to see streetlights sync with aerial CCTV footage? Load the pre-packaged Expressway sample!
+                  </span>
+                </div>
+                <button
+                  onClick={() => {
+                    handleSelectPreset(PRESET_SAMPLES[0]);
+                    setMainView("vision");
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold transition flex items-center gap-1.5 whitespace-nowrap"
+                >
+                  <Film className="w-3.5 h-3.5" />
+                  Load Sample Video
+                </button>
+              </div>
+            )}
+          </section>
+        ) : (
+          <>
         {/* Hero Banner with Telemetry highlights */}
         <section className="mb-8">
           <div className="relative overflow-hidden rounded-2xl bg-gradient-to-r from-slate-900/90 via-slate-900/70 to-indigo-950/40 border border-slate-800/80 p-6 md:p-8 backdrop-blur-md">
@@ -1626,6 +1863,64 @@ export default function Home() {
 
                 </div>
 
+                {/* Adaptive Streetlight Quick Telemetry Card */}
+                <div className="rounded-2xl bg-gradient-to-r from-slate-900/90 to-amber-950/20 border border-amber-500/30 p-5 shadow-lg relative overflow-hidden">
+                  <div className="absolute top-0 right-0 w-32 h-32 bg-amber-500/10 rounded-full blur-3xl pointer-events-none" />
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 rounded-lg bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        <Lightbulb className="w-4 h-4" />
+                      </div>
+                      <div>
+                        <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                          Adaptive Streetlight Dimmer
+                        </h4>
+                        <p className="text-[10px] text-slate-400">
+                          {isVideoResult ? "Synced to Video Stream Playback" : "Calibrated to Detected Traffic Scene"}
+                        </p>
+                      </div>
+                    </div>
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border ${streetlightQuickMetrics.color}`}>
+                      {streetlightQuickMetrics.mode}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2 py-2 mb-3">
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-center">
+                      <span className="text-[10px] text-slate-400 block mb-0.5">Brightness</span>
+                      <span className="text-lg font-extrabold text-amber-300 font-mono">
+                        {streetlightQuickMetrics.brightness}%
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-center">
+                      <span className="text-[10px] text-slate-400 block mb-0.5">Energy Saved</span>
+                      <span className="text-lg font-extrabold text-emerald-400 font-mono">
+                        {streetlightQuickMetrics.powerSavedPct}%
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 text-center">
+                      <span className="text-[10px] text-slate-400 block mb-0.5">Active Draw</span>
+                      <span className="text-lg font-extrabold text-white font-mono">
+                        {streetlightQuickMetrics.currentWatts}W
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-800/80">
+                    <span className="text-[11px] text-slate-400 font-mono">
+                      Flow: <strong className="text-white">{currentActiveVehicleCount} veh</strong> ({streetlightQuickMetrics.instantWattsSaved}W conserved)
+                    </span>
+                    <button
+                      onClick={() => setMainView("streetlight")}
+                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-400 hover:text-amber-300 underline"
+                    >
+                      Open Full Simulation <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
                 {/* Detailed Breakdown by Class */}
                 <div className="rounded-2xl bg-slate-900/60 border border-slate-800 p-5">
                   <div className="flex items-center justify-between mb-4">
@@ -1746,6 +2041,8 @@ export default function Home() {
 
             </div>
           </section>
+        )}
+          </>
         )}
 
       </div>

@@ -16,12 +16,22 @@ def format_time(seconds):
     millis = int((seconds - int(seconds)) * 10)
     return f"{mins:02d}:{secs:02d}.{millis:01d}"
 
+def compute_streetlight_metrics(active_count):
+    if active_count == 0:
+        return 20, "DIM ECO", (50, 205, 50) # 20% Dim, green
+    elif active_count <= 2:
+        return 50, "LOW MED", (238, 211, 34) # 50% Med, cyan
+    elif active_count <= 6:
+        return 80, "MODERATE", (0, 165, 255) # 80% High, amber
+    else:
+        return 100, "HIGH BEAM", (0, 69, 255) # 100% Full, red
+
 def draw_hud(frame, current_count, unique_count, peak_count, time_sec):
     h, w = frame.shape[:2]
     
     # Semi-transparent HUD overlay in top-left
-    hud_w = min(420, int(w * 0.75))
-    hud_h = 75
+    hud_w = min(440, int(w * 0.8))
+    hud_h = 96
     overlay = frame.copy()
     cv2.rectangle(overlay, (15, 15), (15 + hud_w, 15 + hud_h), (12, 17, 29), -1)
     cv2.rectangle(overlay, (15, 15), (15 + hud_w, 15 + hud_h), (0, 229, 255), 1)
@@ -34,6 +44,12 @@ def draw_hud(frame, current_count, unique_count, peak_count, time_sec):
     # Metrics text
     text_metrics = f"Active: {current_count}  |  Peak: {peak_count}  |  Unique Total: {unique_count}"
     cv2.putText(frame, text_metrics, (30, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 229, 255), 1, cv2.LINE_AA)
+
+    # Streetlight Adaptive Dimming Line
+    b_pct, b_mode, b_color = compute_streetlight_metrics(current_count)
+    cv2.circle(frame, (32, 82), 4, b_color, -1)
+    street_text = f"Streetlight: {b_pct}% [{b_mode}]  |  Energy Saved: {100 - b_pct}%"
+    cv2.putText(frame, street_text, (45, 86), cv2.FONT_HERSHEY_SIMPLEX, 0.44, (255, 255, 210), 1, cv2.LINE_AA)
 
     # Time display in top-right of HUD
     time_str = format_time(time_sec)
@@ -85,7 +101,9 @@ def main():
             frame_stride = max(frame_stride, int(total_frames / 200))
             print(f"Adaptive frame stride set to {frame_stride} for {total_frames} frames", file=sys.stderr)
 
-        model = YOLO('models/best.pt')
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        model_path = os.path.join(script_dir, 'models', 'best.pt')
+        model = YOLO(model_path)
 
         raw_out_path = os.path.join(output_dir, 'raw_result.mp4')
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -170,11 +188,15 @@ def main():
                 # Record timeline sample every ~0.5s or on keyframes
                 sample_interval = max(1, int(orig_fps / 2))
                 if frame_idx % sample_interval == 0 or frame_idx == max_process_frames - 1:
+                    b_pct, b_mode, _ = compute_streetlight_metrics(current_count)
                     timeline.append({
                         "timeSec": current_time_sec,
                         "frameIndex": frame_idx,
                         "activeCount": current_count,
-                        "classes": frame_class_counts
+                        "classes": frame_class_counts,
+                        "streetlightBrightness": b_pct,
+                        "streetlightMode": b_mode,
+                        "powerSavedPct": 100 - b_pct
                     })
             else:
                 # For skipped frames, reuse previous plotted frame with updated HUD timestamp
@@ -238,6 +260,7 @@ def main():
         total_unique = len(unique_tracks) if len(unique_tracks) > 0 else sum(class_lifetime_counts.values())
         avg_active = round(sum(active_counts_history) / len(active_counts_history), 2) if active_counts_history else 0
         flow_rate_per_min = round((total_unique / (duration_sec / 60)), 1) if duration_sec > 0 else 0
+        avg_streetlight_b = round(sum([compute_streetlight_metrics(c)[0] for c in active_counts_history]) / len(active_counts_history), 1) if active_counts_history else 20.0
 
         # Class counts aggregation
         final_class_counts = class_lifetime_counts if class_lifetime_counts else last_class_counts
@@ -253,7 +276,9 @@ def main():
                 "processedFrames": frame_idx,
                 "durationSec": round(duration_sec, 2),
                 "fps": round(orig_fps, 2),
-                "estimatedFlowRatePerMin": flow_rate_per_min
+                "estimatedFlowRatePerMin": flow_rate_per_min,
+                "averageStreetlightBrightness": avg_streetlight_b,
+                "averagePowerSavedPercent": round(100.0 - avg_streetlight_b, 1)
             },
             "counts": final_class_counts,
             "timeline": timeline

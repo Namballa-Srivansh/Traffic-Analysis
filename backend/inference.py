@@ -14,9 +14,12 @@ def main():
 
     image_path = sys.argv[1]
     output_dir = sys.argv[2]
+    os.makedirs(output_dir, exist_ok=True)
     
     try:
-        model = YOLO('models/best.pt')
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        model_path = os.path.join(script_dir, 'models', 'best.pt')
+        model = YOLO(model_path)
         results = model(image_path, verbose=False)
         
         # Save plotted image
